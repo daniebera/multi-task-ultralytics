@@ -7,6 +7,7 @@ import types
 from copy import deepcopy
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -701,6 +702,173 @@ class Ensemble(nn.ModuleList):
         y = torch.cat(y, 2)  # nms ensemble, y shape(B, HW, C)
         return y, None  # inference, train output
 
+# New -----------------------------------------------------------------------------------------------------------------
+
+class MultiTaskModel(BaseModel):
+    """
+    MultiTaskModel: A base for multi-task architectures with shared backbone and task-specific heads.
+    """
+
+    def _predict_once(self, x, profile=False, visualize=False, embed=None):
+        """
+        Perform a forward pass through the multi-task network.
+
+        Args:
+            x (torch.Tensor): The input tensor to the model.
+            profile (bool):  Print the computation time of each layer if True, defaults to False.
+            visualize (bool): Save the feature maps of the model if True, defaults to False.
+            embed (list, optional): A list of feature vectors/embeddings to return.
+
+        Returns:
+            (torch.Tensor): The last output of the model.
+        """
+        # indexing: x[hidx*hbs : hidx*hbs+hbs] move bs window based on task index
+        # task-batch is implemented -> always integer batch --but--> batch_size not always power of 2
+
+        bs = x.shape[0]
+        ntasks = len(self.model['heads'])
+        backidx = len(self.model['backbone']) - 1
+        hbs = bs // ntasks  # with global batch the remainder is lost: excess = bs % ntasks
+
+        y, dt, embeddings = [], [], []  # outputs
+        for key, value in self.model.items():  # Fixme: Check correctness in iteration order
+            if key == 'backbone':
+                for m in value:
+                    if m.f != -1:
+                        x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+                    if profile:
+                        self._profile_one_layer(m, x, dt)
+                    x = m(x)  # run
+                    y.append(x if m.i in self.save else None)  # save output
+                    if visualize:
+                        feature_visualization(x, m.type, m.i, save_dir=visualize)
+                    if embed and m.i in embed:
+                        embeddings.append(
+                            nn.functional.adaptive_avg_pool2d(x, (1, 1)).squeeze(-1).squeeze(-1))  # flatten
+                        if m.i == max(embed):
+                            return torch.unbind(torch.cat(embeddings, 1), dim=0)
+            else:
+                for hidx,head in enumerate(value):
+                    for idx,m in enumerate(head):
+                        if m.f != -1:  # refers to Backbone- or Head-specific layers
+                            if isinstance(m.f, int):
+                                x = y[m.f] if m.f<=backidx else y[m.f][hidx*hbs:hidx*hbs+hbs]
+                            else:
+                                x = [x if j == -1 else y[j][hidx*hbs:hidx*hbs+hbs] if j<=backidx else y[j] for j in m.f]
+                        elif hidx == 0 and idx == 0:  # yolo-head compatibility: first layer after backbone is -1
+                            x = m(x[hidx*hbs:hidx*hbs+hbs])
+                        if profile:
+                            self._profile_one_layer(m, x, dt)
+                        x = m(x)  # run
+                        y.append(x if m.i in self.save else None)  # save output
+                        if visualize:
+                            feature_visualization(x, m.type, m.i, save_dir=visualize)
+                        if embed and m.i in embed:
+                            embeddings.append(
+                                nn.functional.adaptive_avg_pool2d(x, (1, 1)).squeeze(-1).squeeze(-1))  # flatten
+                            if m.i == max(embed):
+                                return torch.unbind(torch.cat(embeddings, 1), dim=0)
+        return x
+
+    def loss(self, batch, task='all'):
+        """
+        Generic multi-task loss computation. Assumes that each head has a loss function.
+
+        Args:
+            batch (dict): Batch of data with inputs and labels.
+            task (str): Task to compute loss for, or 'all' for all tasks.
+        """
+        losses = {}
+        for task_name, head in self.task_heads.items():
+            if task == 'all' or task == task_name:
+                losses[f'{task_name}_loss'] = head.loss(batch)  # Assuming each head defines its own loss function
+        total_loss = sum(losses.values())
+        return total_loss, losses
+
+class ImplMultiTaskModel(MultiTaskModel):
+    def __init__(self, cfg="yolomultiv8n", ch=3, nc=None, verbose=True):
+        """
+        Initialize MultiTaskModel with shared backbone and task-specific heads from a single config.
+
+        Args:
+            cfg (dict): Configuration for the full model (backbone + heads).
+            ch (int): Number of input channels.
+            nc (int): Number of classes.
+            verbose (bool): Whether to print model details.
+        """
+        super().__init__()
+
+        self.yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
+
+        # Define model
+        ch = self.yaml["ch"] = self.yaml.get("ch", ch)  # input channels
+        if nc and nc != self.yaml["nc"]:
+            LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
+            self.yaml["nc"] = nc  # override YAML value
+
+        # Parse model using the unified config to define backbone and heads
+        self.model, self.save = parse_model(cfg, ch=ch, verbose=verbose)
+
+        # Store task heads based on config (assuming `parse_model` creates specific heads in `self.model`)
+        self.task_heads = {name: module for name, module in self.model.named_children() if name in config["heads"]}
+
+    def forward(self, x, task='all'):
+        """
+        Forward pass through shared backbone and task-specific heads.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+            task (str): Specify the task ('detection', 'segmentation', 'classification', or 'all').
+        """
+        # Forward through backbone layers only up to the heads
+        x = self._forward_backbone(x)
+
+        # Forward pass through task-specific heads
+        results = {}
+        if task == 'all':
+            for task_name, head in self.task_heads.items():
+                results[task_name] = head(x)
+        elif task in self.task_heads:
+            results[task] = self.task_heads[task](x)
+        else:
+            raise ValueError(f"Task '{task}' is not defined in task heads.")
+
+        return results
+
+    def _forward_backbone(self, x):
+        """
+        Forward pass through the backbone layers up to the task-specific heads.
+        """
+        y = []  # save intermediate outputs if needed
+        for layer in self.model:
+            x = layer(x)
+            if layer.i in self.save:
+                y.append(x)
+        return x
+
+    def loss(self, batch, task='all'):
+        """
+        Compute loss for each task head.
+
+        Args:
+            batch (dict): Batch containing input and labels.
+            task (str): Specify the task ('detection', 'segmentation', 'classification', or 'all').
+        """
+        losses = {}
+
+        if task == 'all':
+            for task_name, head in self.task_heads.items():
+                task_loss = head.loss(batch)  # Assuming each head has its own `loss` method
+                losses[f'{task_name}_loss'] = task_loss
+        elif task in self.task_heads:
+            losses[f'{task}_loss'] = self.task_heads[task].loss(batch)
+        else:
+            raise ValueError(f"Task '{task}' is not defined in task heads.")
+
+        # Aggregate losses (e.g., weighted sum) or return dictionary of individual task losses
+        total_loss = sum(losses.values())
+        return total_loss, losses
+# New End --------------------------------------------------------------------------------------------------------------
 
 # Functions ------------------------------------------------------------------------------------------------------------
 
@@ -1076,6 +1244,171 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         ch.append(c2)
     return nn.Sequential(*layers), sorted(save)
 
+# New ------------------------------------------------------------------------------------------------------------------
+def parse_multi_model(d, ch, verbose=True):  # model_dict, input_channels(3)
+    """Parse a multi-task YOLO model.yaml dictionary into a PyTorch model."""
+    import ast
+
+    # Args
+    legacy = True  # backward compatibility for v3/v5/v8/v9 models
+    max_channels = float("inf")
+    nc, act, scales = (d.get(x) for x in ("nc", "activation", "scales"))
+    depth, width, kpt_shape = (d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape"))
+    if scales:
+        scale = d.get("scale")
+        if not scale:
+            scale = tuple(scales.keys())[0]
+            LOGGER.warning(f"WARNING ⚠️ no model scale passed. Assuming scale='{scale}'.")
+        depth, width, max_channels = scales[scale]
+
+    if act:
+        Conv.default_act = eval(act)  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
+        if verbose:
+            LOGGER.info(f"{colorstr('activation:')} {act}")  # print
+
+    if verbose:
+        LOGGER.info(f"\n{'':>3}{'from':>20}{'n':>3}{'params':>10}  {'module':<45}{'arguments':<30}")
+    ch = [ch]
+    layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
+
+    backidx = len(d['backbone']) - 1
+    # Fixme: Do the dict head order match the yaml?
+    headsidx = np.cumsum([len(value) for key, value in d.items() if key.startswith('head')]) + backidx # cumsum of heads' end idx
+    heads = [item for key, value in d.items() if key.startswith('head') for item in value]  # merge heads in yaml
+    model = nn.ModuleDict({
+        'backbone': None,  # Placeholder for backbone
+        'heads': nn.ModuleList()  # Empty ModuleList for heads
+    })
+
+    for i, (f, n, m, args) in enumerate(d['backbone'] + heads):  # from, number, module, args
+        m = getattr(torch.nn, m[3:]) if "nn." in m else globals()[m]  # get module
+        for j, a in enumerate(args):
+            if isinstance(a, str):
+                try:
+                    args[j] = locals()[a] if a in locals() else ast.literal_eval(a)
+                except ValueError:
+                    pass
+        n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
+        if m in {
+            Classify,
+            Conv,
+            ConvTranspose,
+            GhostConv,
+            Bottleneck,
+            GhostBottleneck,
+            SPP,
+            SPPF,
+            C2fPSA,
+            C2PSA,
+            DWConv,
+            Focus,
+            BottleneckCSP,
+            C1,
+            C2,
+            C2f,
+            C3k2,
+            RepNCSPELAN4,
+            ELAN1,
+            ADown,
+            AConv,
+            SPPELAN,
+            C2fAttn,
+            C3,
+            C3TR,
+            C3Ghost,
+            nn.ConvTranspose2d,
+            DWConvTranspose2d,
+            C3x,
+            RepC3,
+            PSA,
+            SCDown,
+            C2fCIB,
+        }:
+            c1, c2 = ch[f], args[0]
+            if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+            if m is C2fAttn:
+                args[1] = make_divisible(min(args[1], max_channels // 2) * width, 8)  # embed channels
+                args[2] = int(
+                    max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2]
+                )  # num heads
+
+            args = [c1, c2, *args[1:]]
+            if m in {
+                BottleneckCSP,
+                C1,
+                C2,
+                C2f,
+                C3k2,
+                C2fAttn,
+                C3,
+                C3TR,
+                C3Ghost,
+                C3x,
+                RepC3,
+                C2fPSA,
+                C2fCIB,
+                C2PSA,
+            }:
+                args.insert(2, n)  # number of repeats
+                n = 1
+            if m is C3k2:  # for M/L/X sizes
+                legacy = False
+                if scale in "mlx":
+                    args[3] = True
+        elif m is AIFI:
+            args = [ch[f], *args]
+        elif m in {HGStem, HGBlock}:
+            c1, cm, c2 = ch[f], args[0], args[1]
+            args = [c1, cm, c2, *args[2:]]
+            if m is HGBlock:
+                args.insert(4, n)  # number of repeats
+                n = 1
+        elif m is ResNetLayer:
+            c2 = args[1] if args[3] else args[1] * 4
+        elif m is nn.BatchNorm2d:
+            args = [ch[f]]
+        elif m is Concat:
+            c2 = sum(ch[x] for x in f)
+        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}:
+            args.append([ch[x] for x in f])
+            if m is Segment:
+                args[2] = make_divisible(min(args[2], max_channels) * width, 8)
+            if m in {Detect, Segment, Pose, OBB}:
+                m.legacy = legacy
+        elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
+            args.insert(1, [ch[x] for x in f])
+        elif m is CBLinear:
+            c2 = args[0]
+            c1 = ch[f]
+            args = [c1, c2, *args[1:]]
+        elif m is CBFuse:
+            c2 = ch[f[-1]]
+        else:
+            c2 = ch[f]
+
+        m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
+        t = str(m)[8:-2].replace("__main__.", "")  # module type
+        m_.np = sum(x.numel() for x in m_.parameters())  # number params
+        m_.i, m_.f, m_.type = i, f, t  # attach index, 'from' index, type
+        if verbose:
+            LOGGER.info(f"{i:>3}{str(f):>20}{n_:>3}{m_.np:10.0f}  {t:<45}{str(args):<30}")  # print
+        save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
+        layers.append(m_)
+        if i == 0:
+            ch = []
+        ch.append(c2)
+        if i == backidx:  # Save Backbone end to restore before each head
+            c1back, c2back, chback = deepcopy(c1), deepcopy(c2), deepcopy(ch)
+            model['backbone'] = nn.Sequential(*layers)
+            layers = []
+        if i in headsidx:  # Restore Backbone channels' status
+            c1, c2, ch = deepcopy(c1back), deepcopy(c2back), deepcopy(chback)
+            model['heads'].append(nn.Sequential(*layers))
+            layers = []
+    return model, sorted(save)
+
+# New End --------------------------------------------------------------------------------------------------------------
 
 def yaml_model_load(path):
     """Load a YOLOv8 model from a YAML file."""
@@ -1111,7 +1444,7 @@ def guess_model_scale(model_path):
         return ""
 
 
-def guess_model_task(model):
+def guess_model_task(model):  # TODO: Re-define to handle 'multi' task
     """
     Guess the task of a PyTorch model from its architecture or configuration.
 

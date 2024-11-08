@@ -56,6 +56,12 @@ class YOLO(Model):
                 "validator": yolo.obb.OBBValidator,
                 "predictor": yolo.obb.OBBPredictor,
             },
+            "multi": {
+                "model": MultiModel,
+                "trainer": yolo.multi.MultiTrainer,
+                "validator": yolo.multi.MultiValidator,
+                "predictor": yolo.multi.MultiPredictor,
+            },
         }
 
 

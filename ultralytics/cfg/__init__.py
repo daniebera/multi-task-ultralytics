@@ -47,7 +47,7 @@ SOLUTION_MAP = {
 
 # Define valid tasks and modes
 MODES = {"train", "val", "predict", "export", "track", "benchmark"}
-TASKS = {"detect", "segment", "classify", "pose", "obb"}
+TASKS = {"detect", "segment", "classify", "pose", "obb", "multi"}
 TASK2DATA = {
     "detect": "coco8.yaml",
     "segment": "coco8-seg.yaml",
@@ -61,6 +61,7 @@ TASK2MODEL = {
     "classify": "yolo11n-cls.pt",
     "pose": "yolo11n-pose.pt",
     "obb": "yolo11n-obb.pt",
+    "multi": "none",
 }
 TASK2METRIC = {
     "detect": "metrics/mAP50-95(B)",
@@ -68,6 +69,7 @@ TASK2METRIC = {
     "classify": "metrics/accuracy_top1",
     "pose": "metrics/mAP50-95(P)",
     "obb": "metrics/mAP50-95(B)",
+    "multi": "none",
 }
 MODELS = {TASK2MODEL[task] for task in TASKS}
 
