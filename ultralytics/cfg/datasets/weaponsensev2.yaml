@@ -1,0 +1,30 @@
+# Ultralytics YOLO 🚀, AGPL-3.0 license
+# COCO 2017 dataset http://cocodataset.org by Microsoft
+# Example usage: yolo train data=coco.yaml
+# parent
+# ├── ultralytics
+# └── datasets
+#     └── WeaponSenseV2  ← downloads here (20.1 GB)
+
+
+# Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
+path: ../datasets  # dataset root dir
+# train: [WeaponSenseV2/images/train,MOTHSynth/images/train]  # train images (relative to 'path')
+train:
+  - WeaponSenseV2/images/train
+  - WeaponSenseV2/images/val
+train_sr: /home/daniele/VRAI/FeatureSuperResolution/group4b/datasets/MOTHSynth/images/train
+# val: [WeaponSenseV2/images/val,MOTHSynth/images/val]  # val images (relative to 'path')
+val: WeaponSenseV2/images/val
+val_sr: /home/daniele/VRAI/FeatureSuperResolution/group4b/datasets/MOTHSynth/images/val
+
+test: images/val # test images (optional)
+
+# Classes
+names:
+  0: handgun
+  1: knife
+
+
+# Download script/URL (optional)
+# download: https://ultralytics.com/assets/coco128.zip

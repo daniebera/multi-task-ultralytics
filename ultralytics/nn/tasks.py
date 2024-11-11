@@ -730,7 +730,7 @@ class MultiTaskModel(BaseModel):
         backidx = len(self.model['backbone']) - 1
         hbs = bs // ntasks  # with global batch the remainder is lost: excess = bs % ntasks
 
-        y, dt, embeddings = [], [], []  # outputs
+        y, dt, embeddings, outs = [], [], [], []  # outputs
         for key, value in self.model.items():  # Fixme: Check correctness in iteration order
             if key == 'backbone':
                 for m in value:
@@ -752,7 +752,7 @@ class MultiTaskModel(BaseModel):
                     for idx,m in enumerate(head):
                         if m.f != -1:  # refers to Backbone- or Head-specific layers
                             if isinstance(m.f, int):
-                                x = y[m.f] if m.f<=backidx else y[m.f][hidx*hbs:hidx*hbs+hbs]
+                                x = y[m.f] if m.f > backidx else y[m.f][hidx*hbs:hidx*hbs+hbs]
                             else:
                                 x = [x if j == -1 else y[j][hidx*hbs:hidx*hbs+hbs] if j<=backidx else y[j] for j in m.f]
                         elif hidx == 0 and idx == 0:  # yolo-head compatibility: first layer after backbone is -1
@@ -768,22 +768,31 @@ class MultiTaskModel(BaseModel):
                                 nn.functional.adaptive_avg_pool2d(x, (1, 1)).squeeze(-1).squeeze(-1))  # flatten
                             if m.i == max(embed):
                                 return torch.unbind(torch.cat(embeddings, 1), dim=0)
-        return x
+                    outs.append(x)
+        return outs
 
-    def loss(self, batch, task='all'):
+    def loss(self, batch, preds=None):
         """
         Generic multi-task loss computation. Assumes that each head has a loss function.
 
         Args:
             batch (dict): Batch of data with inputs and labels.
-            task (str): Task to compute loss for, or 'all' for all tasks.
+            preds (torch.Tensor | List[torch.Tensor]): Predictions.
         """
-        losses = {}
-        for task_name, head in self.task_heads.items():
-            if task == 'all' or task == task_name:
-                losses[f'{task_name}_loss'] = head.loss(batch)  # Assuming each head defines its own loss function
-        total_loss = sum(losses.values())
-        return total_loss, losses
+        bs = batch["img"].shape[0]
+        ntasks = len(self.model['heads'])
+        hbs = bs // ntasks
+        losses = []
+
+        if getattr(self, "criterion", None) is None:
+            self.criterion = self.init_criterion()
+
+        preds = self.forward(batch["img"]) if preds is None else preds
+        for hidx,pred in enumerate(preds):
+            batch_head = batch
+            batch_head['img'] = batch_head['img'][hidx*hbs : hidx*hbs+hbs]
+            losses.append(self.criterion[hidx](pred, batch_head))
+        return losses
 
 class ImplMultiTaskModel(MultiTaskModel):
     def __init__(self, cfg="yolomultiv8n", ch=3, nc=None, verbose=True):
