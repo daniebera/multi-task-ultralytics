@@ -819,7 +819,30 @@ class BaseTrainer:
 
 class BaseMultiTrainer(BaseTrainer):
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None):
+        """
+        Generic multi-task trainer initialization.
+
+        Args:
+            cfg: Configuration object or dictionary.
+            kwargs: Additional arguments for customization.
+        """
         super().__init__(cfg, overrides, _callbacks)
+        self.task_trainers = {}  # Dictionary to hold task-specific trainers
+
+    def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="train"):
+        """
+        Generate dataloaders by combining those from task-specific trainers.
+
+        Returns:
+            A combined dataloader for multi-task training.
+        """
+        dataloaders = {task: trainer.get_dataloader(dataset_path=data,
+                                                    batch_size=batch_size,
+                                                    rank=rank,
+                                                    mode=mode)
+                       for (task, trainer), data in zip(self.task_trainers.items(),
+                                                      dataset_path)}
+        return dataloaders
 
     def _setup_train(self, world_size):
         """Builds dataloaders and optimizer on correct rank process."""
@@ -839,6 +862,7 @@ class BaseMultiTrainer(BaseTrainer):
         )
         always_freeze_names = [".dfl"]  # always freeze these layers
         freeze_layer_names = [f"model.{x}." for x in freeze_list] + always_freeze_names
+        # Todo: Multi-task model is currently a ModuleDict: has named_parameters?
         for k, v in self.model.named_parameters():
             # v.register_hook(lambda x: torch.nan_to_num(x))  # NaN to 0 (commented for erratic training results)
             if any(x in k for x in freeze_layer_names):
@@ -885,6 +909,7 @@ class BaseMultiTrainer(BaseTrainer):
 
         # Dataloaders
         batch_size = self.batch_size // max(world_size, 1)
+        # Todo: Handle multiple trainsets
         self.train_loader = self.get_dataloader(self.trainset, batch_size=batch_size, rank=LOCAL_RANK, mode="train")
         if RANK in {-1, 0}:
             # Note: When training DOTA dataset, double batch size could get OOM on images with >2000 objects.
@@ -898,6 +923,8 @@ class BaseMultiTrainer(BaseTrainer):
             self.ema = ModelEMA(self.model)
             if self.args.plots:
                 self.plot_training_labels()
+
+        # Todo: Change through the file self.train_loader with list(self.train_loader.values()[0])
 
         # Optimizer
         self.accumulate = max(round(self.args.nbs / self.batch_size), 1)  # accumulate loss before optimizing
@@ -1077,26 +1104,3 @@ class BaseMultiTrainer(BaseTrainer):
             self.run_callbacks("on_train_end")
         self._clear_memory()
         self.run_callbacks("teardown")
-
-    def get_dataset(self):
-        """
-        Get train, val path from data dict if it exists.
-
-        Returns None if data format is not recognized.
-        """
-        try:
-            if self.args.task == "classify":
-                data = check_cls_dataset(self.args.data)
-            elif self.args.data.split(".")[-1] in {"yaml", "yml"} or self.args.task in {
-                "detect",
-                "segment",
-                "pose",
-                "obb",
-            }:
-                data = check_det_dataset(self.args.data)
-                if "yaml_file" in data:
-                    self.args.data = data["yaml_file"]  # for validating 'yolo train data=url.zip' usage
-        except Exception as e:
-            raise RuntimeError(emojis(f"Dataset '{clean_url(self.args.data)}' error ❌ {e}")) from e
-        self.data = data
-        return data["train"], data.get("val") or data.get("test")
