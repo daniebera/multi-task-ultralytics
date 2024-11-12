@@ -924,12 +924,12 @@ class BaseMultiTrainer(BaseTrainer):
             if self.args.plots:
                 self.plot_training_labels()
 
-        # Todo: Change through the file self.train_loader with list(self.train_loader.values()[0])
+        # Fixme: self.train_loader --became--> list(self.train_loader.values())[0] is not optimal
 
         # Optimizer
         self.accumulate = max(round(self.args.nbs / self.batch_size), 1)  # accumulate loss before optimizing
         weight_decay = self.args.weight_decay * self.batch_size * self.accumulate / self.args.nbs  # scale weight_decay
-        iterations = math.ceil(len(self.train_loader.dataset) / max(self.batch_size, self.args.nbs)) * self.epochs
+        iterations = math.ceil(len(list(self.train_loader.values())[0].dataset) / max(self.batch_size, self.args.nbs)) * self.epochs
         self.optimizer = self.build_optimizer(
             model=self.model,
             name=self.args.optimizer,
@@ -951,7 +951,7 @@ class BaseMultiTrainer(BaseTrainer):
             self._setup_ddp(world_size)
         self._setup_train(world_size)
 
-        nb = len(self.train_loader)  # number of batches
+        nb = len(list(self.train_loader.values())[0])  # number of batches
         nw = max(round(self.args.warmup_epochs * nb),
                  100) if self.args.warmup_epochs > 0 else -1  # warmup iterations
         last_opt_step = -1
@@ -961,7 +961,7 @@ class BaseMultiTrainer(BaseTrainer):
         self.run_callbacks("on_train_start")
         LOGGER.info(
             f'Image sizes {self.args.imgsz} train, {self.args.imgsz} val\n'
-            f'Using {self.train_loader.num_workers * (world_size or 1)} dataloader workers\n'
+            f'Using {list(self.train_loader.values())[0].num_workers * (world_size or 1)} dataloader workers\n'
             f"Logging results to {colorstr('bold', self.save_dir)}\n"
             f'Starting training for ' + (
                 f"{self.args.time} hours..." if self.args.time else f"{self.epochs} epochs...")
@@ -980,16 +980,18 @@ class BaseMultiTrainer(BaseTrainer):
 
             self.model.train()
             if RANK != -1:
-                self.train_loader.sampler.set_epoch(epoch)
-            pbar = enumerate(self.train_loader)
+                for task in self.train_loader:
+                    self.train_loader[task].sampler.set_epoch(epoch)
+            pbar = enumerate(zip(self.train_loader.values()))
             # Update dataloader attributes (optional)
             if epoch == (self.epochs - self.args.close_mosaic):
                 self._close_dataloader_mosaic()
-                self.train_loader.reset()
+                for task in self.train_loader:
+                    self.train_loader[task].reset()
 
             if RANK in {-1, 0}:
                 LOGGER.info(self.progress_string())
-                pbar = TQDM(enumerate(self.train_loader), total=nb)
+                pbar = TQDM(enumerate(zip(self.train_loader.values())), total=nb)
             self.tloss = None
             for i, batch in pbar:
                 self.run_callbacks("on_train_batch_start")
@@ -1009,7 +1011,10 @@ class BaseMultiTrainer(BaseTrainer):
                 # Forward
                 with autocast(self.amp):
                     batch = self.preprocess_batch(batch)
-                    self.loss, self.loss_items = self.model(batch)
+                    outs = self.model(batch)
+                    loss, loss_items = zip(*outs)
+                    self.loss = sum(loss)
+                    self.loss_items = torch.cat(loss_items)
                     if RANK != -1:
                         self.loss *= world_size
                     self.tloss = (

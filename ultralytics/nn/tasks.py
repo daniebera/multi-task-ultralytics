@@ -1453,7 +1453,7 @@ def guess_model_scale(model_path):
         return ""
 
 
-def guess_model_task(model):  # TODO: Re-define to handle 'multi' task
+def guess_model_task(model):  # Todo: Re-define to handle 'multi' task
     """
     Guess the task of a PyTorch model from its architecture or configuration.
 
