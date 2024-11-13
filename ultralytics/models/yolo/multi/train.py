@@ -8,17 +8,17 @@ import numpy as np
 import torch.nn as nn
 
 from ultralytics.data import build_dataloader, build_yolo_dataset
-from ultralytics.engine.trainer import BaseTrainer
+from ultralytics.engine.trainer import BaseMultiTrainer
 from ultralytics.models import yolo
-from ultralytics.nn.tasks import DetectionModel
+from ultralytics.nn.tasks import DetSRModel
 from ultralytics.utils import LOGGER, RANK
 from ultralytics.utils.plotting import plot_images, plot_labels, plot_results
 from ultralytics.utils.torch_utils import de_parallel, torch_distributed_zero_first
 
 
-class MultiTrainer(BaseTrainer):
+class DetSRTrainer(BaseMultiTrainer):
     """
-    A class extending the BaseTrainer class for training based on a multi-task model.
+    A class extending the BaseMultiTrainer class for training based on a multi-task model.
 
     Example:
         ```python
@@ -29,6 +29,12 @@ class MultiTrainer(BaseTrainer):
         trainer.train()
         ```
     """
+
+    def __init__(self, cfg, **kwargs):
+        super().__init__(cfg, **kwargs)
+        # Initialize trainers specific to detection and classification tasks
+        self.task_trainers["detection"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
+        self.task_trainers["classification"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
 
     def build_dataset(self, img_path, mode="train", batch=None):
         """
@@ -85,7 +91,7 @@ class MultiTrainer(BaseTrainer):
 
     def get_model(self, cfg=None, weights=None, verbose=True):
         """Return a YOLO detection model."""
-        model = DetectionModel(cfg, nc=self.data["nc"], verbose=verbose and RANK == -1)
+        model = DetSRModel(cfg, nc=self.data["nc"], verbose=verbose and RANK == -1)
         if weights:
             model.load(weights)
         return model
