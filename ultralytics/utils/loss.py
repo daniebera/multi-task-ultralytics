@@ -276,9 +276,9 @@ class v8DetectionLoss:
 class v8SegmentationLoss(v8DetectionLoss):
     """Criterion class for computing training losses."""
 
-    def __init__(self, model):  # model must be de-paralleled
+    def __init__(self, model, head=None):  # model must be de-paralleled
         """Initializes the v8SegmentationLoss class, taking a de-paralleled model as argument."""
-        super().__init__(model)
+        super().__init__(model, head=head)
         self.overlap = model.args.overlap_mask
 
     def __call__(self, preds, batch):
@@ -459,10 +459,10 @@ class v8SegmentationLoss(v8DetectionLoss):
 class v8PoseLoss(v8DetectionLoss):
     """Criterion class for computing training losses."""
 
-    def __init__(self, model):  # model must be de-paralleled
+    def __init__(self, model, head=None):  # model must be de-paralleled
         """Initializes v8PoseLoss with model, sets keypoint variables and declares a keypoint loss instance."""
-        super().__init__(model)
-        self.kpt_shape = model.model[-1].kpt_shape
+        super().__init__(model, head=head)
+        self.kpt_shape = model.model['heads'][head][-1].kpt_shape if head is not None else model.model[-1].kpt_shape
         self.bce_pose = nn.BCEWithLogitsLoss()
         is_pose = self.kpt_shape == [17, 3]
         nkpt = self.kpt_shape[0]  # number of keypoints
@@ -625,9 +625,9 @@ class v8ClassificationLoss:
 class v8OBBLoss(v8DetectionLoss):
     """Calculates losses for object detection, classification, and box distribution in rotated YOLO models."""
 
-    def __init__(self, model):
+    def __init__(self, model, head=None):
         """Initializes v8OBBLoss with model, assigner, and rotated bbox loss; note model must be de-paralleled."""
-        super().__init__(model)
+        super().__init__(model, head=head)
         self.assigner = RotatedTaskAlignedAssigner(topk=10, num_classes=self.nc, alpha=0.5, beta=6.0)
         self.bbox_loss = RotatedBboxLoss(self.reg_max).to(self.device)
 

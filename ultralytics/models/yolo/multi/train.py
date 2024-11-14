@@ -14,7 +14,7 @@ from ultralytics.nn.tasks import DetSRModel
 from ultralytics.utils import LOGGER, RANK
 from ultralytics.utils.plotting import plot_images, plot_labels, plot_results
 from ultralytics.utils.torch_utils import de_parallel, torch_distributed_zero_first
-
+from ultralytics.utils import DEFAULT_CFG
 
 class DetSRTrainer(BaseMultiTrainer):
     """
@@ -30,36 +30,14 @@ class DetSRTrainer(BaseMultiTrainer):
         ```
     """
 
-    def __init__(self, cfg, **kwargs):
+    def __init__(self, cfg=DEFAULT_CFG, **kwargs):
         super().__init__(cfg, **kwargs)
-        # Initialize trainers specific to detection and classification tasks
+        # Initialize trainers specific to detection and super-resolution tasks
         self.task_trainers["detection"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
+        # Fixme: change to SR
         self.task_trainers["classification"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
 
-    def build_dataset(self, img_path, mode="train", batch=None):
-        """
-        Build YOLO Dataset.
-
-        Args:
-            img_path (str): Path to the folder containing images.
-            mode (str): `train` mode or `val` mode, users are able to customize different augmentations for each mode.
-            batch (int, optional): Size of batches, this is for `rect`. Defaults to None.
-        """
-        gs = max(int(de_parallel(self.model).stride.max() if self.model else 0), 32)
-        return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, rect=mode == "val", stride=gs)
-
-    def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="train"):
-        """Construct and return dataloader."""
-        assert mode in {"train", "val"}, f"Mode must be 'train' or 'val', not {mode}."
-        with torch_distributed_zero_first(rank):  # init dataset *.cache only once if DDP
-            dataset = self.build_dataset(dataset_path, mode, batch_size)
-        shuffle = mode == "train"
-        if getattr(dataset, "rect", False) and shuffle:
-            LOGGER.warning("WARNING ⚠️ 'rect=True' is incompatible with DataLoader shuffle, setting shuffle=False")
-            shuffle = False
-        workers = self.args.workers if mode == "train" else self.args.workers * 2
-        return build_dataloader(dataset, batch_size, workers, shuffle, rank)  # return dataloader
-
+    # Todo: Adjust preprocess_batch method to handle multi-dataset batch for multi-task training
     def preprocess_batch(self, batch):
         """Preprocesses a batch of images by scaling and converting to float."""
         batch["img"] = batch["img"].to(self.device, non_blocking=True).float() / 255
@@ -96,6 +74,7 @@ class DetSRTrainer(BaseMultiTrainer):
             model.load(weights)
         return model
 
+    # Fixme: check if main task validation works in multi-task training
     def get_validator(self):
         """Returns a DetectionValidator for YOLO model validation."""
         self.loss_names = "box_loss", "cls_loss", "dfl_loss"

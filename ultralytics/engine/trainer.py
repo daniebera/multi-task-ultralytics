@@ -910,6 +910,9 @@ class BaseMultiTrainer(BaseTrainer):
         # Dataloaders
         batch_size = self.batch_size // max(world_size, 1)
         # Todo: Handle multiple trainsets
+        #  here get_datalader calls the specific task_trainers get_dataloader methods (e.g., DetectionTrainer, SegmentationTrainer)
+        #  which in turn calls the specific task_trainers build_dataset methods
+        #  BUT such method(s) requires a defined self.model and the task_trainers doesn't fully define the model
         self.train_loader = self.get_dataloader(self.trainset, batch_size=batch_size, rank=LOCAL_RANK, mode="train")
         if RANK in {-1, 0}:
             # Note: When training DOTA dataset, double batch size could get OOM on images with >2000 objects.
@@ -917,6 +920,9 @@ class BaseMultiTrainer(BaseTrainer):
                 self.testset, batch_size=batch_size if self.args.task == "obb" else batch_size * 2, rank=-1,
                 mode="val"
             )
+            # Todo: Implement validation for multi-task training or leave main task validation only
+            #  here ModelEMA is a class for Exponential Moving Average of model weights,
+            #  needed to ensure that the model is robust to changes in the input distribution.
             self.validator = self.get_validator()
             metric_keys = self.validator.metrics.keys + self.label_loss_items(prefix="val")
             self.metrics = dict(zip(metric_keys, [0] * len(metric_keys)))
@@ -1013,6 +1019,9 @@ class BaseMultiTrainer(BaseTrainer):
                     batch = self.preprocess_batch(batch)
                     outs = self.model(batch)
                     loss, loss_items = zip(*outs)
+                    # Todo: Implement weighting of losses with array of weights, without loosing the ability to backpropagate:
+                    #  Element-wise multiplication and sum of losses
+                    #  self.loss = sum([l*tw for l, tw in zip(loss, task_weights)])
                     self.loss = sum(loss)
                     self.loss_items = torch.cat(loss_items)
                     if RANK != -1:

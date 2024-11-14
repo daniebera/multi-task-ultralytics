@@ -72,7 +72,6 @@ from ultralytics.utils.loss import (
     v8OBBLoss,
     v8PoseLoss,
     v8SegmentationLoss,
-    Multiv8DetectionLoss,
     L1Loss
 )
 from ultralytics.utils.ops import make_divisible
@@ -751,6 +750,23 @@ class MultiTaskModel(BaseModel):
                             return torch.unbind(torch.cat(embeddings, 1), dim=0)
             else:
                 for hidx,head in enumerate(value):
+                    if not self.training: # Fixme: check if this is correct for validation on main task only
+                        for m in head:
+                            if m.f != -1:  # if not from previous layer
+                                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in
+                                                                         m.f]  # from earlier layers
+                            if profile:
+                                self._profile_one_layer(m, x, dt)
+                            x = m(x)  # run
+                            y.append(x if m.i in self.save else None)  # save output
+                            if visualize:
+                                feature_visualization(x, m.type, m.i, save_dir=visualize)
+                            if embed and m.i in embed:
+                                embeddings.append(
+                                    nn.functional.adaptive_avg_pool2d(x, (1, 1)).squeeze(-1).squeeze(-1))  # flatten
+                                if m.i == max(embed):
+                                    return torch.unbind(torch.cat(embeddings, 1), dim=0)
+                        return x
                     for idx,m in enumerate(head):
                         if m.f != -1:  # refers to Backbone- or Head-specific layers
                             if isinstance(m.f, int):
@@ -795,6 +811,24 @@ class MultiTaskModel(BaseModel):
             batch_head['img'] = batch_head['img'][hidx*hbs : hidx*hbs+hbs]
             losses.append(self.criterion[hidx](pred, batch_head))
         return losses
+
+    def _apply(self, fn):
+        """
+        Applies a function to all the tensors in the model that are not parameters or registered buffers.
+
+        Args:
+            fn (function): the function to apply to the model
+
+        Returns:
+            (BaseModel): An updated BaseModel object.
+        """
+        self = super(BaseModel, self)._apply(fn)
+        m = self.model['heads'][0][-1]  # Detect() # Fixme: assumes that the last layer of the first head is a Detect() object
+        if isinstance(m, Detect):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
+            m.stride = fn(m.stride)
+            m.anchors = fn(m.anchors)
+            m.strides = fn(m.strides)
+        return self
 
 class DetSRModel(MultiTaskModel):
     def __init__(self, cfg="yolov8n.yaml", ch=3, nc=None, verbose=True):  # model, input channels, number of classes
@@ -851,91 +885,91 @@ class DetSRModel(MultiTaskModel):
     # Fixme: add end2end support
     def init_criterion(self):
         """Initialize the loss criterion for the DetectionModel."""
-        return [Multiv8DetectionLoss(self, head=0), L1Loss()]
+        return [v8DetectionLoss(self, head=0), L1Loss()]
 
 
-    def __init__(self, cfg="yolomultiv8n", ch=3, nc=None, verbose=True):
-        """
-        Initialize MultiTaskModel with shared backbone and task-specific heads from a single config.
-
-        Args:
-            cfg (dict): Configuration for the full model (backbone + heads).
-            ch (int): Number of input channels.
-            nc (int): Number of classes.
-            verbose (bool): Whether to print model details.
-        """
-        super().__init__()
-
-        self.yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
-
-        # Define model
-        ch = self.yaml["ch"] = self.yaml.get("ch", ch)  # input channels
-        if nc and nc != self.yaml["nc"]:
-            LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
-            self.yaml["nc"] = nc  # override YAML value
-
-        # Parse model using the unified config to define backbone and heads
-        self.model, self.save = parse_model(cfg, ch=ch, verbose=verbose)
-
-        # Store task heads based on config (assuming `parse_model` creates specific heads in `self.model`)
-        self.task_heads = {name: module for name, module in self.model.named_children() if name in config["heads"]}
-
-    def forward(self, x, task='all'):
-        """
-        Forward pass through shared backbone and task-specific heads.
-
-        Args:
-            x (torch.Tensor): Input tensor.
-            task (str): Specify the task ('detection', 'segmentation', 'classification', or 'all').
-        """
-        # Forward through backbone layers only up to the heads
-        x = self._forward_backbone(x)
-
-        # Forward pass through task-specific heads
-        results = {}
-        if task == 'all':
-            for task_name, head in self.task_heads.items():
-                results[task_name] = head(x)
-        elif task in self.task_heads:
-            results[task] = self.task_heads[task](x)
-        else:
-            raise ValueError(f"Task '{task}' is not defined in task heads.")
-
-        return results
-
-    def _forward_backbone(self, x):
-        """
-        Forward pass through the backbone layers up to the task-specific heads.
-        """
-        y = []  # save intermediate outputs if needed
-        for layer in self.model:
-            x = layer(x)
-            if layer.i in self.save:
-                y.append(x)
-        return x
-
-    def loss(self, batch, task='all'):
-        """
-        Compute loss for each task head.
-
-        Args:
-            batch (dict): Batch containing input and labels.
-            task (str): Specify the task ('detection', 'segmentation', 'classification', or 'all').
-        """
-        losses = {}
-
-        if task == 'all':
-            for task_name, head in self.task_heads.items():
-                task_loss = head.loss(batch)  # Assuming each head has its own `loss` method
-                losses[f'{task_name}_loss'] = task_loss
-        elif task in self.task_heads:
-            losses[f'{task}_loss'] = self.task_heads[task].loss(batch)
-        else:
-            raise ValueError(f"Task '{task}' is not defined in task heads.")
-
-        # Aggregate losses (e.g., weighted sum) or return dictionary of individual task losses
-        total_loss = sum(losses.values())
-        return total_loss, losses
+    # def __init__(self, cfg="yolomultiv8n", ch=3, nc=None, verbose=True):
+    #     """
+    #     Initialize MultiTaskModel with shared backbone and task-specific heads from a single config.
+    #
+    #     Args:
+    #         cfg (dict): Configuration for the full model (backbone + heads).
+    #         ch (int): Number of input channels.
+    #         nc (int): Number of classes.
+    #         verbose (bool): Whether to print model details.
+    #     """
+    #     super().__init__()
+    #
+    #     self.yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
+    #
+    #     # Define model
+    #     ch = self.yaml["ch"] = self.yaml.get("ch", ch)  # input channels
+    #     if nc and nc != self.yaml["nc"]:
+    #         LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
+    #         self.yaml["nc"] = nc  # override YAML value
+    #
+    #     # Parse model using the unified config to define backbone and heads
+    #     self.model, self.save = parse_model(cfg, ch=ch, verbose=verbose)
+    #
+    #     # Store task heads based on config (assuming `parse_model` creates specific heads in `self.model`)
+    #     self.task_heads = {name: module for name, module in self.model.named_children() if name in config["heads"]}
+    #
+    # def forward(self, x, task='all'):
+    #     """
+    #     Forward pass through shared backbone and task-specific heads.
+    #
+    #     Args:
+    #         x (torch.Tensor): Input tensor.
+    #         task (str): Specify the task ('detection', 'segmentation', 'classification', or 'all').
+    #     """
+    #     # Forward through backbone layers only up to the heads
+    #     x = self._forward_backbone(x)
+    #
+    #     # Forward pass through task-specific heads
+    #     results = {}
+    #     if task == 'all':
+    #         for task_name, head in self.task_heads.items():
+    #             results[task_name] = head(x)
+    #     elif task in self.task_heads:
+    #         results[task] = self.task_heads[task](x)
+    #     else:
+    #         raise ValueError(f"Task '{task}' is not defined in task heads.")
+    #
+    #     return results
+    #
+    # def _forward_backbone(self, x):
+    #     """
+    #     Forward pass through the backbone layers up to the task-specific heads.
+    #     """
+    #     y = []  # save intermediate outputs if needed
+    #     for layer in self.model:
+    #         x = layer(x)
+    #         if layer.i in self.save:
+    #             y.append(x)
+    #     return x
+    #
+    # def loss(self, batch, task='all'):
+    #     """
+    #     Compute loss for each task head.
+    #
+    #     Args:
+    #         batch (dict): Batch containing input and labels.
+    #         task (str): Specify the task ('detection', 'segmentation', 'classification', or 'all').
+    #     """
+    #     losses = {}
+    #
+    #     if task == 'all':
+    #         for task_name, head in self.task_heads.items():
+    #             task_loss = head.loss(batch)  # Assuming each head has its own `loss` method
+    #             losses[f'{task_name}_loss'] = task_loss
+    #     elif task in self.task_heads:
+    #         losses[f'{task}_loss'] = self.task_heads[task].loss(batch)
+    #     else:
+    #         raise ValueError(f"Task '{task}' is not defined in task heads.")
+    #
+    #     # Aggregate losses (e.g., weighted sum) or return dictionary of individual task losses
+    #     total_loss = sum(losses.values())
+    #     return total_loss, losses
 # New End --------------------------------------------------------------------------------------------------------------
 
 # Functions ------------------------------------------------------------------------------------------------------------

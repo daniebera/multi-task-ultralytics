@@ -4,7 +4,14 @@ from pathlib import Path
 
 from ultralytics.engine.model import Model
 from ultralytics.models import yolo
-from ultralytics.nn.tasks import ClassificationModel, DetectionModel, OBBModel, PoseModel, SegmentationModel, WorldModel, MultiTaskModel # Fixme: MultiTaskModel temporary before subclassing
+from ultralytics.nn.tasks import (ClassificationModel,
+                                  DetectionModel,
+                                  OBBModel,
+                                  PoseModel,
+                                  SegmentationModel,
+                                  WorldModel,
+                                  DetSRModel
+                                  )
 from ultralytics.utils import ROOT, yaml_load
 
 
@@ -56,13 +63,12 @@ class YOLO(Model):
                 "validator": yolo.obb.OBBValidator,
                 "predictor": yolo.obb.OBBPredictor,
             },
-            # Todo: To add when classes will be implemented
-            # "multi": {
-            #     "model": MultiTaskModel,
-            #     "trainer": yolo.multi.MultiTrainer,
-            #     "validator": yolo.multi.MultiValidator,
-            #     "predictor": yolo.multi.MultiPredictor,
-            # },
+            "detsr": {
+                "model": DetSRModel,
+                "trainer": yolo.multi.DetSRTrainer,
+                "validator": yolo.detect.DetectionValidator,
+                "predictor": yolo.detect.DetectionPredictor,
+            },
         }
 
 
