@@ -12,6 +12,18 @@ from ultralytics.utils.torch_utils import autocast
 from .metrics import bbox_iou, probiou
 from .tal import bbox2dist
 
+# New -----------------------------------------------------------------------------------------------------------------
+
+class L1Loss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l1_loss = nn.L1Loss()
+
+    def forward(self, preds, labels):
+        loss = self.l1_loss(preds, labels)
+        return loss, loss.detach()
+
+# New End --------------------------------------------------------------------------------------------------------------
 
 class VarifocalLoss(nn.Module):
     """
@@ -157,12 +169,12 @@ class KeypointLoss(nn.Module):
 class v8DetectionLoss:
     """Criterion class for computing training losses."""
 
-    def __init__(self, model, tal_topk=10):  # model must be de-paralleled
+    def __init__(self, model, tal_topk=10, head=None):  # model must be de-paralleled
         """Initializes v8DetectionLoss with the model, defining model-related properties and BCE loss function."""
         device = next(model.parameters()).device  # get model device
         h = model.args  # hyperparameters
 
-        m = model.model[-1]  # Detect() module
+        m = model.model['heads'][head][-1] if head is not None else model.model[-1] # Detect() module
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
         self.hyp = h
         self.stride = m.stride  # model strides

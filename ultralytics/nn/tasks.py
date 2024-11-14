@@ -72,6 +72,8 @@ from ultralytics.utils.loss import (
     v8OBBLoss,
     v8PoseLoss,
     v8SegmentationLoss,
+    Multiv8DetectionLoss,
+    L1Loss
 )
 from ultralytics.utils.ops import make_divisible
 from ultralytics.utils.plotting import feature_visualization
@@ -846,10 +848,10 @@ class DetSRModel(MultiTaskModel):
             self.info()
             LOGGER.info("")
 
-
+    # Fixme: add end2end support
     def init_criterion(self):
         """Initialize the loss criterion for the DetectionModel."""
-        return E2EDetectLoss(self) if getattr(self, "end2end", False) else v8DetectionLoss(self)
+        return [Multiv8DetectionLoss(self, head=0), L1Loss()]
 
 
     def __init__(self, cfg="yolomultiv8n", ch=3, nc=None, verbose=True):
@@ -1464,6 +1466,7 @@ def parse_multi_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         if i == 0:
             ch = []
         ch.append(c2)
+        # Todo: Think about setting the (backbone + first head) as main task with unique nn.Sequential(*layers)
         if i == backidx:  # Save Backbone end to restore before each head
             c1back, c2back, chback = deepcopy(c1), deepcopy(c2), deepcopy(ch)
             model['backbone'] = nn.Sequential(*layers)
