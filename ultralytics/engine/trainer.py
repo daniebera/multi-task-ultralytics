@@ -841,7 +841,7 @@ class BaseMultiTrainer(BaseTrainer):
                                                     rank=rank,
                                                     mode=mode)
                        for (task, trainer), data in zip(self.task_trainers.items(),
-                                                      dataset_path)}
+                                                      dataset_path if isinstance(dataset_path, list) else [dataset_path])}
         return dataloaders
 
     def _setup_train(self, world_size):
@@ -988,7 +988,7 @@ class BaseMultiTrainer(BaseTrainer):
             if RANK != -1:
                 for task in self.train_loader:
                     self.train_loader[task].sampler.set_epoch(epoch)
-            pbar = enumerate(zip(self.train_loader.values()))
+            pbar = enumerate(zip(*self.train_loader.values()))
             # Update dataloader attributes (optional)
             if epoch == (self.epochs - self.args.close_mosaic):
                 self._close_dataloader_mosaic()
@@ -997,7 +997,7 @@ class BaseMultiTrainer(BaseTrainer):
 
             if RANK in {-1, 0}:
                 LOGGER.info(self.progress_string())
-                pbar = TQDM(enumerate(zip(self.train_loader.values())), total=nb)
+                pbar = TQDM(enumerate(zip(*self.train_loader.values())), total=nb)
             self.tloss = None
             for i, batch in pbar:
                 self.run_callbacks("on_train_batch_start")

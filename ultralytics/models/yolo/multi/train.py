@@ -5,6 +5,7 @@ import random
 from copy import copy
 
 import numpy as np
+import torch
 import torch.nn as nn
 
 from ultralytics.data import build_dataloader, build_yolo_dataset
@@ -40,6 +41,19 @@ class DetSRTrainer(BaseMultiTrainer):
     # Todo: Adjust preprocess_batch method to handle multi-dataset batch for multi-task training
     def preprocess_batch(self, batch):
         """Preprocesses a batch of images by scaling and converting to float."""
+        # Create a unique batch with task-specific keys and concatenate 'img' values.
+        tmp_batch = {}
+        for idx, sub_batch in enumerate(batch):
+            for key in sub_batch.keys():
+                if key != "img":
+                    tmp_batch[key + f"_{idx}"] = sub_batch[key]
+                else:
+                    if idx == 0:
+                        tmp_batch[key] = sub_batch[key]
+                    else:
+                        tmp_batch[key] = torch.cat((tmp_batch[key], sub_batch[key]), 0)
+
+        batch = tmp_batch
         batch["img"] = batch["img"].to(self.device, non_blocking=True).float() / 255
         if self.args.multi_scale:
             imgs = batch["img"]
@@ -123,6 +137,8 @@ class DetSRTrainer(BaseMultiTrainer):
 
     def plot_training_labels(self):
         """Create a labeled training plot of the YOLO model."""
-        boxes = np.concatenate([lb["bboxes"] for lb in self.train_loader.dataset.labels], 0)
-        cls = np.concatenate([lb["cls"] for lb in self.train_loader.dataset.labels], 0)
-        plot_labels(boxes, cls.squeeze(), names=self.data["names"], save_dir=self.save_dir, on_plot=self.on_plot)
+        # Fixme: Implement plotting for SR task
+        for task_train_loader in self.train_loader.values():
+            boxes = np.concatenate([lb["bboxes"] for lb in task_train_loader.dataset.labels], 0)
+            cls = np.concatenate([lb["cls"] for lb in task_train_loader.dataset.labels], 0)
+            plot_labels(boxes, cls.squeeze(), names=self.data["names"], save_dir=self.save_dir, on_plot=self.on_plot)

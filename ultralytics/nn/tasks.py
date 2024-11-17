@@ -6,6 +6,7 @@ import re
 import types
 from copy import deepcopy
 from pathlib import Path
+from traceback import print_tb
 
 import numpy as np
 import torch
@@ -774,7 +775,7 @@ class MultiTaskModel(BaseModel):
                             else:
                                 x = [x if j == -1 else y[j][hidx*hbs:hidx*hbs+hbs] if j<=backidx else y[j] for j in m.f]
                         elif hidx == 0 and idx == 0:  # yolo-head compatibility: first layer after backbone is -1
-                            x = m(x[hidx*hbs:hidx*hbs+hbs])
+                            x = x[hidx*hbs:hidx*hbs+hbs]
                         if profile:
                             self._profile_one_layer(m, x, dt)
                         x = m(x)  # run
@@ -788,6 +789,14 @@ class MultiTaskModel(BaseModel):
                                 return torch.unbind(torch.cat(embeddings, 1), dim=0)
                     outs.append(x)
         return outs
+
+    # Todo: Here batch is the composition of all task-specific sub-batches. It is a dictionary with keys 'img', 'cls', 'bboxes', 'batch_idx', etc.
+    #  The each sub batch has its own images and info related to images such as cls, bboxes, batch_idx, etc.
+    #  Problem arise in loss computation, because it relies on info from the entire batch dictionary. The entire batch dictionary is not task-specific.
+    #  There are two possible solutions:
+    #  1. Make the keys of images info in the dict task-specific. For example, 'cls0', 'bboxes0', 'batch_idx0', etc.
+    #  In this case, to ensure compatibility with previous non-multi-task models, when calling loss computation on a sub-batch of images
+    #  we need to pass also the info with task-specific keys, but removing the index from the key names.
 
     def loss(self, batch, preds=None):
         """
@@ -807,8 +816,12 @@ class MultiTaskModel(BaseModel):
 
         preds = self.forward(batch["img"]) if preds is None else preds
         for hidx,pred in enumerate(preds):
-            batch_head = batch
-            batch_head['img'] = batch_head['img'][hidx*hbs : hidx*hbs+hbs]
+            # Extract task-specific sub-batch keys and assign to batch_head removing the task-specific index
+            batch_head = {}
+            for key in batch.keys():
+                if key.endswith(f"_{hidx}"):
+                    batch_head[key[:-len(f"_{hidx}")]] = batch[key]
+            batch_head['img'] = batch['img'][hidx*hbs : hidx*hbs+hbs]
             losses.append(self.criterion[hidx](pred, batch_head))
         return losses
 
@@ -1509,6 +1522,7 @@ def parse_multi_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             c1, c2, ch = deepcopy(c1back), deepcopy(c2back), deepcopy(chback)
             model['heads'].append(nn.Sequential(*layers))
             layers = []
+
     return model, sorted(save)
 
 # New End --------------------------------------------------------------------------------------------------------------
