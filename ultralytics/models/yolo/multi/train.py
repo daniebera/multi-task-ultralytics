@@ -88,12 +88,12 @@ class DetSRTrainer(BaseMultiTrainer):
             model.load(weights)
         return model
 
-    # Fixme: check if main task validation works in multi-task training
+    # Fixme: check if main task validation works in multi-task training and handle loss_names
     def get_validator(self):
         """Returns a DetectionValidator for YOLO model validation."""
-        self.loss_names = "box_loss", "cls_loss", "dfl_loss"
+        self.loss_names = "box_loss_0", "cls_loss_0", "dfl_loss_0","box_loss_1", "cls_loss_1", "dfl_loss_1"
         return yolo.detect.DetectionValidator(
-            self.test_loader, save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks
+            self.test_loader['detection'], save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks
         )
 
     def label_loss_items(self, loss_items=None, prefix="train"):

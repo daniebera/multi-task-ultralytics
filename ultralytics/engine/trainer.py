@@ -1018,12 +1018,13 @@ class BaseMultiTrainer(BaseTrainer):
                 with autocast(self.amp):
                     batch = self.preprocess_batch(batch)
                     outs = self.model(batch)
-                    loss, loss_items = zip(*outs)
+                    self.loss, self.loss_items = zip(*outs)
+
                     # Todo: Implement weighting of losses with array of weights, without loosing the ability to backpropagate:
                     #  Element-wise multiplication and sum of losses
                     #  self.loss = sum([l*tw for l, tw in zip(loss, task_weights)])
-                    self.loss = sum(loss)
-                    self.loss_items = torch.cat(loss_items)
+                    self.loss = sum(self.loss)
+                    self.loss_items = torch.cat(self.loss_items)
                     if RANK != -1:
                         self.loss *= world_size
                     self.tloss = (
@@ -1051,18 +1052,20 @@ class BaseMultiTrainer(BaseTrainer):
                 # Log
                 if RANK in {-1, 0}:
                     loss_length = self.tloss.shape[0] if len(self.tloss.shape) else 1
+                    # Fixme: set_description must be changed based on the specific tasks (e.g., detection, segmentation)
                     pbar.set_description(
                         ("%11s" * 2 + "%11.4g" * (2 + loss_length))
                         % (
                             f"{epoch + 1}/{self.epochs}",
                             f"{self._get_memory():.3g}G",  # (GB) GPU memory util
                             *(self.tloss if loss_length > 1 else torch.unsqueeze(self.tloss, 0)),  # losses
-                            batch["cls"].shape[0],  # batch size, i.e. 8
+                            sum([batch[k].shape[0] if 'cls' in k else 0 for k in batch.keys()]), # batch["cls"].shape[0],  # batch size, i.e. 8
                             batch["img"].shape[-1],  # imgsz, i.e 640
                         )
                     )
                     self.run_callbacks("on_batch_end")
-                    if self.args.plots and ni in self.plot_idx:
+                    # Fixme: added 'not' just to avoid error, should be fixed
+                    if not self.args.plots and ni in self.plot_idx:
                         self.plot_training_samples(batch, ni)
 
                 self.run_callbacks("on_train_batch_end")

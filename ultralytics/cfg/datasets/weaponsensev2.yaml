@@ -12,7 +12,7 @@ path: ../datasets  # dataset root dir
 # train: [WeaponSenseV2/images/train,MOTHSynth/images/train]  # train images (relative to 'path')
 train:
   - WeaponSenseV2/images/train
-  - WeaponSenseV2/images/val
+  - WeaponSenseV2/images/train
 train_sr: /home/daniele/VRAI/FeatureSuperResolution/group4b/datasets/MOTHSynth/images/train
 # val: [WeaponSenseV2/images/val,MOTHSynth/images/val]  # val images (relative to 'path')
 val: WeaponSenseV2/images/val

@@ -11,6 +11,7 @@ from traceback import print_tb
 import numpy as np
 import torch
 import torch.nn as nn
+from numpy.array_api import equal
 
 from ultralytics.nn.modules import (
     AIFI,
@@ -815,6 +816,16 @@ class MultiTaskModel(BaseModel):
             self.criterion = self.init_criterion()
 
         preds = self.forward(batch["img"]) if preds is None else preds
+
+        # Fixme: implement loss computation for each head also in validation mode if requested
+        # Todo: something bad in loss computation happens here for validation mode
+        #  Error is:
+        #  self.loss += model.loss(batch, preds)[1]
+        #  RuntimeError: The size of tensor a (6) must match the size of tensor b (3) at non-singleton dimension 0
+
+        if not self.training:
+            return self.criterion[0](preds, batch)
+
         for hidx,pred in enumerate(preds):
             # Extract task-specific sub-batch keys and assign to batch_head removing the task-specific index
             batch_head = {}
@@ -866,26 +877,33 @@ class DetSRModel(MultiTaskModel):
         self.names = {i: f"{i}" for i in range(self.yaml["nc"])}  # default names dict
         self.inplace = self.yaml.get("inplace", True)
         # Fixme: add end2end support
-        # self.end2end = getattr(self.model[-1], "end2end", False)
+        self.end2end = getattr(self.model['heads'][0][-1], "end2end", False)  # First head's last layer
 
         # Build strides
         # Fixme: add stride computation
-        # m = self.model[-1]  # Detect()
-        # if isinstance(m, Detect):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
-        #     s = 256  # 2x min stride
-        #     m.inplace = self.inplace
-        #
-        #     def _forward(x):
-        #         """Performs a forward pass through the model, handling different Detect subclass types accordingly."""
-        #         if self.end2end:
-        #             return self.forward(x)["one2many"]
-        #         return self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB)) else self.forward(x)
-        #
-        #     m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
-        #     self.stride = m.stride
-        #     m.bias_init()  # only run once
-        # else:
-        #     self.stride = torch.Tensor([32])  # default stride for i.e. RTDETR
+        m = self.model['heads'][0][-1]  # Detect() from the first head
+        # Fixme: added for the second head temporary
+        m2 = self.model['heads'][1][-1]  # Detect() from the second head
+
+        if isinstance(m, Detect):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
+            s = 256  # 2x min stride
+            m.inplace = self.inplace
+
+            def _forward(x):
+                """Performs a forward pass through the model, handling different Detect subclass types accordingly."""
+                if self.end2end:
+                    return self.forward(x)["one2many"]
+                return self.forward(x)[0][0] if isinstance(m, (Segment, Pose, OBB)) else self.forward(x)[0]
+
+            m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
+            self.stride = m.stride
+            m.bias_init()  # only run once
+
+            # Fixme: added for the second head temporary
+            m2.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
+            m2.bias_init()  # only run once
+        else:
+            self.stride = torch.Tensor([32])  # default stride for i.e. RTDETR
 
         self.stride = torch.Tensor([32])  # default stride for i.e. RTDETR
 
@@ -898,7 +916,7 @@ class DetSRModel(MultiTaskModel):
     # Fixme: add end2end support
     def init_criterion(self):
         """Initialize the loss criterion for the DetectionModel."""
-        return [v8DetectionLoss(self, head=0), L1Loss()]
+        return [v8DetectionLoss(self, head=0),v8DetectionLoss(self, head=1)]# [v8DetectionLoss(self, head=0), L1Loss()]
 
 
     # def __init__(self, cfg="yolomultiv8n", ch=3, nc=None, verbose=True):
