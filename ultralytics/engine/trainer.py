@@ -913,6 +913,7 @@ class BaseMultiTrainer(BaseTrainer):
         #  here get_datalader calls the specific task_trainers get_dataloader methods (e.g., DetectionTrainer, SegmentationTrainer)
         #  which in turn calls the specific task_trainers build_dataset methods
         #  BUT such method(s) requires a defined self.model and the task_trainers doesn't fully define the model
+        # Fixme: temporary solution in DetectionTrainer build_dataset(...)
         self.train_loader = self.get_dataloader(self.trainset, batch_size=batch_size, rank=LOCAL_RANK, mode="train")
         if RANK in {-1, 0}:
             # Note: When training DOTA dataset, double batch size could get OOM on images with >2000 objects.

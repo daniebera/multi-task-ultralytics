@@ -92,7 +92,7 @@ class DetSRTrainer(BaseMultiTrainer):
     def get_validator(self):
         """Returns a DetectionValidator for YOLO model validation."""
         self.loss_names = "box_loss_0", "cls_loss_0", "dfl_loss_0","box_loss_1", "cls_loss_1", "dfl_loss_1"
-        return yolo.detect.DetectionValidator(
+        return yolo.multi.DetSRValidator(
             self.test_loader['detection'], save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks
         )
 

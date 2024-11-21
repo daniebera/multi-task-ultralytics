@@ -66,7 +66,7 @@ class YOLO(Model):
             "detsr": {
                 "model": DetSRModel,
                 "trainer": yolo.multi.DetSRTrainer,
-                "validator": yolo.detect.DetectionValidator,
+                "validator": yolo.multi.DetSRValidator,
                 "predictor": yolo.detect.DetectionPredictor,
             },
         }

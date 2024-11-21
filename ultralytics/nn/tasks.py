@@ -11,7 +11,6 @@ from traceback import print_tb
 import numpy as np
 import torch
 import torch.nn as nn
-from numpy.array_api import equal
 
 from ultralytics.nn.modules import (
     AIFI,
@@ -790,14 +789,6 @@ class MultiTaskModel(BaseModel):
                                 return torch.unbind(torch.cat(embeddings, 1), dim=0)
                     outs.append(x)
         return outs
-
-    # Todo: Here batch is the composition of all task-specific sub-batches. It is a dictionary with keys 'img', 'cls', 'bboxes', 'batch_idx', etc.
-    #  The each sub batch has its own images and info related to images such as cls, bboxes, batch_idx, etc.
-    #  Problem arise in loss computation, because it relies on info from the entire batch dictionary. The entire batch dictionary is not task-specific.
-    #  There are two possible solutions:
-    #  1. Make the keys of images info in the dict task-specific. For example, 'cls0', 'bboxes0', 'batch_idx0', etc.
-    #  In this case, to ensure compatibility with previous non-multi-task models, when calling loss computation on a sub-batch of images
-    #  we need to pass also the info with task-specific keys, but removing the index from the key names.
 
     def loss(self, batch, preds=None):
         """
