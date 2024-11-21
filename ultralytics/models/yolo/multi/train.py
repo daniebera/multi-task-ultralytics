@@ -35,10 +35,13 @@ class DetSRTrainer(BaseMultiTrainer):
         super().__init__(cfg, **kwargs)
         # Initialize trainers specific to detection and super-resolution tasks
         self.task_trainers["detection"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
-        # Fixme: change to SR
+        # Fixme: change imgsz for Super Resolution data loading
+        kwargs['overrides']['imgsz'] = kwargs['overrides']['imgsz'] * cfg.factor
+        self.factor = cfg.factor
         self.task_trainers["classification"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
 
-    # Todo: Adjust preprocess_batch method to handle multi-dataset batch for multi-task training
+
+    # Todo: Adjust preprocess_batch method to handle multi-dataset batch for multi-task training. Here for Super Resolution
     def preprocess_batch(self, batch):
         """Preprocesses a batch of images by scaling and converting to float."""
         # Create a unique batch with task-specific keys and concatenate 'img' values.
@@ -49,12 +52,21 @@ class DetSRTrainer(BaseMultiTrainer):
                     tmp_batch[key + f"_{idx}"] = sub_batch[key]
                 else:
                     if idx == 0:
-                        tmp_batch[key] = sub_batch[key]
+                        tmp_batch["img"] = sub_batch["img"]
                     else:
-                        tmp_batch[key] = torch.cat((tmp_batch[key], sub_batch[key]), 0)
+                        tmp_batch["hr_img"+ f"_{idx}"] = sub_batch["img"]
+                        sub_batch["img"] = nn.functional.interpolate(tmp_batch['hr_img'+ f"_{idx}"],
+                                                                 size=[i // self.factor for i in
+                                                                       tmp_batch['hr_img'+ f"_{idx}"].size()[2:]],
+                                                                 mode='bilinear',
+                                                                 align_corners=True)
+                        tmp_batch["img"] = torch.cat((tmp_batch["img"], sub_batch["img"]), 0)
 
         batch = tmp_batch
+        # Todo: avoid hardcode of 'hr_img' and 'hr_img_1' keys
+        batch["hr_img_1"] = batch["hr_img_1"].to(self.device, non_blocking=True).float() / 255
         batch["img"] = batch["img"].to(self.device, non_blocking=True).float() / 255
+
         if self.args.multi_scale:
             imgs = batch["img"]
             sz = (
@@ -91,7 +103,7 @@ class DetSRTrainer(BaseMultiTrainer):
     # Fixme: check if main task validation works in multi-task training and handle loss_names
     def get_validator(self):
         """Returns a DetectionValidator for YOLO model validation."""
-        self.loss_names = "box_loss_0", "cls_loss_0", "dfl_loss_0","box_loss_1", "cls_loss_1", "dfl_loss_1"
+        self.loss_names = "box_loss", "cls_loss", "dfl_loss","sr_loss"
         return yolo.multi.DetSRValidator(
             self.test_loader['detection'], save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks
         )

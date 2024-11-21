@@ -14,13 +14,13 @@ from .tal import bbox2dist
 
 # New -----------------------------------------------------------------------------------------------------------------
 
-class L1Loss(nn.Module):
+class SRL1Loss(nn.Module):
     def __init__(self):
         super().__init__()
         self.l1_loss = nn.L1Loss()
 
     def forward(self, preds, labels):
-        loss = self.l1_loss(preds, labels)
+        loss = self.l1_loss(preds, labels['hr_img'])
         return loss, loss.detach()
 
 # New End --------------------------------------------------------------------------------------------------------------

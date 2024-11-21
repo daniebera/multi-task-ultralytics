@@ -1025,7 +1025,7 @@ class BaseMultiTrainer(BaseTrainer):
                     #  Element-wise multiplication and sum of losses
                     #  self.loss = sum([l*tw for l, tw in zip(loss, task_weights)])
                     self.loss = sum(self.loss)
-                    self.loss_items = torch.cat(self.loss_items)
+                    self.loss_items = torch.cat([torch.flatten(item) for item in self.loss_items])
                     if RANK != -1:
                         self.loss *= world_size
                     self.tloss = (

@@ -62,7 +62,7 @@ from ultralytics.nn.modules import (
     SCDown,
     Segment,
     WorldDetect,
-    v10Detect,
+    v10Detect, DeepLab,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -73,7 +73,7 @@ from ultralytics.utils.loss import (
     v8OBBLoss,
     v8PoseLoss,
     v8SegmentationLoss,
-    L1Loss
+    SRL1Loss
 )
 from ultralytics.utils.ops import make_divisible
 from ultralytics.utils.plotting import feature_visualization
@@ -874,8 +874,8 @@ class DetSRModel(MultiTaskModel):
         # Build strides
         # Fixme: add stride computation
         m = self.model['heads'][0][-1]  # Detect() from the first head
-        # Fixme: added for the second head temporary
-        m2 = self.model['heads'][1][-1]  # Detect() from the second head
+        # Fixme: m2 added for the second head temporary
+        # m2 = self.model['heads'][1][-1]  # Detect() from the second head
 
         if isinstance(m, Detect):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
             s = 256  # 2x min stride
@@ -891,9 +891,9 @@ class DetSRModel(MultiTaskModel):
             self.stride = m.stride
             m.bias_init()  # only run once
 
-            # Fixme: added for the second head temporary
-            m2.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
-            m2.bias_init()  # only run once
+            # Fixme: m2 added for the second head temporary
+            # m2.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
+            # m2.bias_init()  # only run once
         else:
             self.stride = torch.Tensor([32])  # default stride for i.e. RTDETR
 
@@ -908,7 +908,7 @@ class DetSRModel(MultiTaskModel):
     # Fixme: add end2end support
     def init_criterion(self):
         """Initialize the loss criterion for the DetectionModel."""
-        return [v8DetectionLoss(self, head=0),v8DetectionLoss(self, head=1)]# [v8DetectionLoss(self, head=0), L1Loss()]
+        return [v8DetectionLoss(self, head=0),SRL1Loss()]
 
 
     # def __init__(self, cfg="yolomultiv8n", ch=3, nc=None, verbose=True):
@@ -1495,12 +1495,15 @@ def parse_multi_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}:
+        # Fixme: Add Super Resolution module
+        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect, DeepLab}:
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
             if m in {Detect, Segment, Pose, OBB}:
                 m.legacy = legacy
+            if m in {DeepLab}:
+                args = [item for sublist in args for item in (sublist if isinstance(sublist, list) else [sublist])]
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])
         elif m is CBLinear:
@@ -1568,7 +1571,11 @@ def guess_model_scale(model_path):
     try:
         return re.search(r"yolo[v]?\d+([nslmx])", Path(model_path).stem).group(1)  # noqa, returns n, s, m, l, or x
     except AttributeError:
-        return ""
+        print("Running multi-task model...")
+        try:
+            return re.search(r"(\d+)([nslmx])", Path(model_path).stem).group(2)  # noqa, returns n, s, m, l, or x
+        except AttributeError:
+            return ""
 
 
 def guess_model_task(model):  # Todo: Re-define to handle 'multi' task
