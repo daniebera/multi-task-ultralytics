@@ -823,6 +823,7 @@ class MultiTaskModel(BaseModel):
         #  self.loss += model.loss(batch, preds)[1]
         #  RuntimeError: The size of tensor a (6) must match the size of tensor b (3) at non-singleton dimension 0
 
+        # Compute loss only for the main task in validation mode
         if not self.training:
             return self.criterion[0](preds, batch)
 

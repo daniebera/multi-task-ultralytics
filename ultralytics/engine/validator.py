@@ -116,7 +116,16 @@ class BaseValidator:
             model = trainer.ema.ema or trainer.model
             model = model.half() if self.args.half else model.float()
             # self.model = model
-            self.loss = torch.zeros_like(trainer.loss_items, device=trainer.device)
+            # Todo: Here self.loss length copy the one of the trainer, but on multi-task training it differs, because
+            #  the validator has one loss item (i.e., one task) while the trainer has multiple loss items concatenated
+            #  can't change here in BaseValidator to maintain compatibility with single-task training
+            #  Possible solutions are:
+            #   1. create a BaseValidatorMultiTask class that handles multi-task training, which implies that
+            #   the validator in multi-task training can't be a DetectionValidator since it inherits from BaseValidator,
+            #   thus we need to create a class that inherits from BaseValidatorMultiTask instead
+            #
+            #  Fixme: A temporary trick is to change the original self.loss = torch.zeros_like(trainer.loss_items, device=trainer.device)
+            self.loss = torch.zeros_like(trainer.loss_items[:3], device=trainer.device)
             self.args.plots &= trainer.stopper.possible_stop or (trainer.epoch == trainer.epochs - 1)
             model.eval()
         else:
