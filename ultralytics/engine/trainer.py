@@ -1122,3 +1122,12 @@ class BaseMultiTrainer(BaseTrainer):
             self.run_callbacks("on_train_end")
         self._clear_memory()
         self.run_callbacks("teardown")
+
+    def _close_dataloader_mosaic(self):
+        """Update dataloaders to stop using mosaic augmentation."""
+        for task in self.train_loader:
+            if hasattr(self.train_loader[task].dataset, "mosaic"):
+                self.train_loader[task].dataset.mosaic = False
+            if hasattr(self.train_loader[task].dataset, "close_mosaic"):
+                LOGGER.info("Closing dataloader mosaic")
+                self.train_loader[task].dataset.close_mosaic(hyp=copy(self.args))
