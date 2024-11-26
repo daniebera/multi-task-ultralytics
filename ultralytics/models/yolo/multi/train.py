@@ -40,6 +40,8 @@ class DetSRTrainer(BaseMultiTrainer):
         self.factor = cfg.factor
         self.task_trainers["classification"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
 
+        self.task_weights = cfg.task_weights
+
 
     # Todo: Adjust preprocess_batch method to handle multi-dataset batch for multi-task training. Here for Super Resolution
     def preprocess_batch(self, batch):

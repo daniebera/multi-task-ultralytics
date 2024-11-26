@@ -11,12 +11,12 @@
 path: ../datasets  # dataset root dir
 # train: [WeaponSenseV2/images/train,MOTHSynth/images/train]  # train images (relative to 'path')
 train:
-  - WeaponSenseV2_short/images/train
-  - MOTHSynth_short/images/train
+  - WeaponSenseV2/images/train
+  - MOTHSynth/images/train
 
-val: WeaponSenseV2_short/images/val
+val: WeaponSenseV2/images/val
 
-test: WeaponSenseV2_short/images/val # test images (optional)
+test: WeaponSenseV2/images/val # test images (optional)
 
 # Classes
 names:

@@ -1019,13 +1019,14 @@ class BaseMultiTrainer(BaseTrainer):
                 with autocast(self.amp):
                     batch = self.preprocess_batch(batch)
                     outs = self.model(batch)
-                    self.loss, self.loss_items = zip(*outs)
+                    loss, loss_items = zip(*outs)
 
                     # Todo: Implement weighting of losses with array of weights, without loosing the ability to backpropagate:
                     #  Element-wise multiplication and sum of losses
-                    #  self.loss = sum([l*tw for l, tw in zip(loss, task_weights)])
-                    self.loss = sum(self.loss)
-                    self.loss_items = torch.cat([torch.flatten(item) for item in self.loss_items])
+
+                    loss_items = [l*tw for l, tw in zip(loss_items,self.task_weights)]
+                    self.loss = sum([l*tw for l, tw in zip(loss, self.task_weights)])
+                    self.loss_items = torch.cat([torch.flatten(item) for item in loss_items])
                     if RANK != -1:
                         self.loss *= world_size
                     self.tloss = (
