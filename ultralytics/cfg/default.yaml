@@ -124,7 +124,7 @@ crop_fraction: 1.0 # (float) image crop fraction for classification (0.1-1), 1.0
 factor: 2 # (int) super resolution factor
 
 # Multi-task settings --------------------------------------------------------------------------------------------------
-task_weights: [1.0, 0.1] # (list[float]) task weights for detsr, i.e. [det, sr]
+task_weights: [1.0, 1.0] # (list[float]) task weights for detsr, i.e. [det, sr]
 
 # Custom config.yaml ---------------------------------------------------------------------------------------------------
 cfg: # (str, optional) for overriding defaults.yaml

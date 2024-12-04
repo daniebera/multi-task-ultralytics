@@ -34,14 +34,52 @@ class DetSRTrainer(BaseMultiTrainer):
     def __init__(self, cfg=DEFAULT_CFG, **kwargs):
         super().__init__(cfg, **kwargs)
         # Initialize trainers specific to detection and super-resolution tasks
-        self.task_trainers["detection"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
+        self.tasks = ['detection', 'super_resolution']
+        #self.task_trainers["detection"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
         # Fixme: change imgsz for Super Resolution data loading
-        kwargs['overrides']['imgsz'] = kwargs['overrides']['imgsz'] * cfg.factor
+        #kwargs['overrides']['imgsz'] = kwargs['overrides']['imgsz'] * cfg.factor
         self.factor = cfg.factor
-        self.task_trainers["classification"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
+        #self.task_trainers["classification"] = yolo.detect.DetectionTrainer(cfg, **kwargs)
 
         self.task_weights = cfg.task_weights
 
+    def build_dataset(self, img_path, mode="train", batch=None, task='detection'):
+        """
+        Build task-specific Dataset.
+
+        Args:
+            img_path (str): Path to the folder containing images.
+            mode (str): `train` mode or `val` mode, users are able to customize different augmentations for each mode.
+            batch (int, optional): Size of batches, this is for `rect`. Defaults to None.
+            task (str): Task name. Defaults to 'detection'.
+        """
+        # Fixme: (if self.model else 0) requires a defined self.model and is not working with multi-task data loading
+        gs = max(int(de_parallel(self.model).stride.max() if (self.model and not isinstance(self.model, str)) else 0),
+                 32)
+        if task == 'detection':
+            return build_yolo_dataset(copy(self.args), img_path, batch, self.data, mode=mode, rect=mode == "val", stride=gs)
+        elif task == 'super_resolution':
+            tmp_args = copy(self.args)
+            tmp_args.imgsz = tmp_args.imgsz * self.factor
+            return build_yolo_dataset(tmp_args, img_path, batch, self.data, mode=mode, rect=mode == "val", stride=gs)
+
+    def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="train"):
+        """Construct and return dataloader."""
+        assert mode in {"train", "val"}, f"Mode must be 'train' or 'val', not {mode}."
+        with torch_distributed_zero_first(rank):  # init dataset *.cache only once if DDP
+            datasets = {task: self.build_dataset(data, mode, batch_size, task)
+                        for task, data in zip(self.tasks,
+                                              dataset_path if isinstance(dataset_path, list) else [dataset_path])}
+        shuffle = mode == "train"
+
+        dataloaders = {}
+        for task in datasets.keys():
+            if getattr(datasets[task], "rect", False) and shuffle:
+                LOGGER.warning(f"WARNING ⚠️ 'rect=True' is incompatible with DataLoader shuffle, setting shuffle=False for {task}")
+                shuffle = False
+            workers = self.args.workers if mode == "train" else self.args.workers * 2
+            dataloaders[task] = build_dataloader(datasets[task], batch_size, workers, shuffle, rank)
+        return dataloaders
 
     # Todo: Adjust preprocess_batch method to handle multi-dataset batch for multi-task training. Here for Super Resolution
     def preprocess_batch(self, batch):
@@ -100,6 +138,7 @@ class DetSRTrainer(BaseMultiTrainer):
         model = DetSRModel(cfg, nc=self.data["nc"], verbose=verbose and RANK == -1)
         if weights:
             model.load(weights)
+            print('Second attempt to load weights (assumes the first attempt was ok)..')
         return model
 
     # Fixme: check if main task validation works in multi-task training and handle loss_names

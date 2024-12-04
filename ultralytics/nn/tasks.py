@@ -790,6 +790,87 @@ class MultiTaskModel(BaseModel):
                     outs.append(x)
         return outs
 
+    def map_yolo_to_multitask(self, yolo_state_dict, model_state_dict, verbose=True):
+        """
+        Map YOLO model's state_dict keys to MultiTaskModel's state_dict keys.
+
+        Args:
+            yolo_state_dict (dict): The state_dict of the YOLO model.
+
+        Returns:
+            dict: Mapped state_dict for the MultiTaskModel.
+        """
+        mapped_state_dict = {}
+        for (k_y, v_y), (k_mt, v_mt) in zip(yolo_state_dict.items(), model_state_dict.items()):
+            # shape equality double-checks that only compatible layers are mapped but is superfluous
+            if 'backbone' in k_mt and v_mt.shape == v_y.shape:
+                mapped_state_dict[k_mt] = v_y
+            elif 'heads.0' in k_mt and v_mt.shape == v_y.shape:
+                mapped_state_dict[k_mt] = v_y
+
+        if verbose:
+            LOGGER.info(f"Mapped {len(mapped_state_dict.keys())}/{len(yolo_state_dict.keys())} items from pretrained weights")
+
+        return mapped_state_dict
+
+    def intersect_dicts(self, csd, model_state_dict):
+        """Return intersection of `csd` and `model_state_dict`, matching keys and shapes."""
+        return {k: v for k, v in csd.items() if k in model_state_dict and v.shape == model_state_dict[k].shape}
+
+    # Todo: Change weight loading ad ensure the first load is ok (in Model load() that call this load()),
+    #  then check for the second (in multi/train calling this load())
+    def load(self, weights, verbose=True):
+        """
+        Load the weights into the model.
+
+        Args:
+            weights (dict | torch.nn.Module): The pre-trained weights to be loaded.
+            verbose (bool, optional): Whether to log the transfer progress. Defaults to True.
+        """
+        model = weights["model"] if isinstance(weights, dict) else weights  # Handle torchvision models
+        csd = model.float().state_dict()  # checkpoint state_dict as FP32
+
+        try:
+            csd_ = intersect_dicts(csd, self.state_dict())  # Filter state_dict keys to only those matching the current model
+            assert len(csd_) > 0, "No weights found to load, try manual mapping of source state_dict to target model"
+        except AssertionError as e:
+            # Map YOLO state_dict to MultiTaskModel state_dict
+            csd_ = self.map_yolo_to_multitask(csd, self.state_dict(), verbose)
+
+        csd = csd_
+
+        print('the intersection dict length is:', len(csd))
+        self.load_state_dict(csd, strict=False)  # Load weights with non-strict mode to allow partial matching
+
+        # Verify and log results
+        current_state_dict = self.state_dict()
+        transferred = []
+        missing = []
+        unexpected = []
+
+        for k, v in csd.items():
+            if k in current_state_dict:
+                if v.shape == current_state_dict[k].shape:
+                    transferred.append(k)
+                else:
+                    missing.append(k)  # Shape mismatch (shouldn't happen with intersect_dicts)
+            else:
+                unexpected.append(k)  # Extra keys in checkpoint (unlikely due to intersect_dicts)
+
+        if verbose:
+            LOGGER.info(f"Transferred {len(transferred)}/{len(current_state_dict)} items from pretrained weights")
+            if missing:
+                LOGGER.warning(f"Missing layers (shape mismatch): {missing}")
+            if unexpected:
+                LOGGER.warning(f"Unexpected layers in checkpoint: {unexpected}")
+
+        # Optional: return a report if needed
+        return {
+            "transferred": transferred,
+            "missing": missing,
+            "unexpected": unexpected
+        }
+
     def loss(self, batch, preds=None):
         """
         Generic multi-task loss computation. Assumes that each head has a loss function.
@@ -910,89 +991,6 @@ class DetSRModel(MultiTaskModel):
         """Initialize the loss criterion for the DetectionModel."""
         return [v8DetectionLoss(self, head=0),SRL1Loss()]
 
-
-    # def __init__(self, cfg="yolomultiv8n", ch=3, nc=None, verbose=True):
-    #     """
-    #     Initialize MultiTaskModel with shared backbone and task-specific heads from a single config.
-    #
-    #     Args:
-    #         cfg (dict): Configuration for the full model (backbone + heads).
-    #         ch (int): Number of input channels.
-    #         nc (int): Number of classes.
-    #         verbose (bool): Whether to print model details.
-    #     """
-    #     super().__init__()
-    #
-    #     self.yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
-    #
-    #     # Define model
-    #     ch = self.yaml["ch"] = self.yaml.get("ch", ch)  # input channels
-    #     if nc and nc != self.yaml["nc"]:
-    #         LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
-    #         self.yaml["nc"] = nc  # override YAML value
-    #
-    #     # Parse model using the unified config to define backbone and heads
-    #     self.model, self.save = parse_model(cfg, ch=ch, verbose=verbose)
-    #
-    #     # Store task heads based on config (assuming `parse_model` creates specific heads in `self.model`)
-    #     self.task_heads = {name: module for name, module in self.model.named_children() if name in config["heads"]}
-    #
-    # def forward(self, x, task='all'):
-    #     """
-    #     Forward pass through shared backbone and task-specific heads.
-    #
-    #     Args:
-    #         x (torch.Tensor): Input tensor.
-    #         task (str): Specify the task ('detection', 'segmentation', 'classification', or 'all').
-    #     """
-    #     # Forward through backbone layers only up to the heads
-    #     x = self._forward_backbone(x)
-    #
-    #     # Forward pass through task-specific heads
-    #     results = {}
-    #     if task == 'all':
-    #         for task_name, head in self.task_heads.items():
-    #             results[task_name] = head(x)
-    #     elif task in self.task_heads:
-    #         results[task] = self.task_heads[task](x)
-    #     else:
-    #         raise ValueError(f"Task '{task}' is not defined in task heads.")
-    #
-    #     return results
-    #
-    # def _forward_backbone(self, x):
-    #     """
-    #     Forward pass through the backbone layers up to the task-specific heads.
-    #     """
-    #     y = []  # save intermediate outputs if needed
-    #     for layer in self.model:
-    #         x = layer(x)
-    #         if layer.i in self.save:
-    #             y.append(x)
-    #     return x
-    #
-    # def loss(self, batch, task='all'):
-    #     """
-    #     Compute loss for each task head.
-    #
-    #     Args:
-    #         batch (dict): Batch containing input and labels.
-    #         task (str): Specify the task ('detection', 'segmentation', 'classification', or 'all').
-    #     """
-    #     losses = {}
-    #
-    #     if task == 'all':
-    #         for task_name, head in self.task_heads.items():
-    #             task_loss = head.loss(batch)  # Assuming each head has its own `loss` method
-    #             losses[f'{task_name}_loss'] = task_loss
-    #     elif task in self.task_heads:
-    #         losses[f'{task}_loss'] = self.task_heads[task].loss(batch)
-    #     else:
-    #         raise ValueError(f"Task '{task}' is not defined in task heads.")
-    #
-    #     # Aggregate losses (e.g., weighted sum) or return dictionary of individual task losses
-    #     total_loss = sum(losses.values())
-    #     return total_loss, losses
 # New End --------------------------------------------------------------------------------------------------------------
 
 # Functions ------------------------------------------------------------------------------------------------------------
@@ -1197,7 +1195,7 @@ def attempt_load_weights(weights, device=None, inplace=True, fuse=False):
     assert all(ensemble[0].nc == m.nc for m in ensemble), f"Models differ in class counts {[m.nc for m in ensemble]}"
     return ensemble
 
-
+# Todo: Adjust the function to the new multi-task model structure
 def attempt_load_one_weight(weight, device=None, inplace=True, fuse=False):
     """Loads a single model weights."""
     ckpt, weight = torch_safe_load(weight)  # load ckpt

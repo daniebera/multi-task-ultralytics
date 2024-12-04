@@ -10,10 +10,10 @@
 # Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
 path: ../datasets  # dataset root dir
 
-train: WeaponSenseV2_short/images/train
-val: WeaponSenseV2_short/images/val
+train: WeaponSenseV2/images/train
+val: WeaponSenseV2/images/val
 
-test: WeaponSenseV2_short/images/val # test images (optional)
+test: WeaponSenseV2/images/val # test images (optional)
 
 # Classes
 names:

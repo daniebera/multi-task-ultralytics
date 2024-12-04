@@ -375,6 +375,7 @@ class Model(nn.Module):
             self.overrides["pretrained"] = weights  # remember the weights for DDP training
             weights, self.ckpt = attempt_load_one_weight(weights)
         self.model.load(weights)
+        print('First attempt to load weights..')
         return self
 
     def save(self, filename: Union[str, Path] = "saved_model.pt") -> None:

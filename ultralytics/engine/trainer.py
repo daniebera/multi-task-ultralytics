@@ -827,22 +827,21 @@ class BaseMultiTrainer(BaseTrainer):
             kwargs: Additional arguments for customization.
         """
         super().__init__(cfg, overrides, _callbacks)
-        self.task_trainers = {}  # Dictionary to hold task-specific trainers
 
-    def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="train"):
-        """
-        Generate dataloaders by combining those from task-specific trainers.
+    def setup_model(self):
+        """Load/create/download model for any task."""
+        if isinstance(self.model, torch.nn.Module):  # if model is loaded beforehand. No setup needed
+            return
 
-        Returns:
-            A combined dataloader for multi-task training.
-        """
-        dataloaders = {task: trainer.get_dataloader(dataset_path=data,
-                                                    batch_size=batch_size,
-                                                    rank=rank,
-                                                    mode=mode)
-                       for (task, trainer), data in zip(self.task_trainers.items(),
-                                                      dataset_path if isinstance(dataset_path, list) else [dataset_path])}
-        return dataloaders
+        cfg, weights = self.model, None
+        ckpt = None
+        if str(self.model).endswith(".pt"):
+            weights, ckpt = attempt_load_one_weight(self.model)
+            cfg = weights.yaml
+        elif isinstance(self.args.pretrained, (str, Path)):
+            weights, _ = attempt_load_one_weight(self.args.pretrained)
+        self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1)  # calls Model(cfg, weights)
+        return ckpt
 
     def _setup_train(self, world_size):
         """Builds dataloaders and optimizer on correct rank process."""

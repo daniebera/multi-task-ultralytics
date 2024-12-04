@@ -246,7 +246,7 @@ class YOLODataset(BaseDataset):
         return new_batch
 
 
-class YOLOMultiModalDataset(YOLODataset):
+class YOLOMultiModalDataset(YOLODataset): # Todo: Implement this class
     """
     Dataset class for loading object detection and/or segmentation labels in YOLO format.
 
