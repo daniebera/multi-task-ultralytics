@@ -834,6 +834,7 @@ class MultiTaskModel(BaseModel):
             csd_ = intersect_dicts(csd, self.state_dict())  # Filter state_dict keys to only those matching the current model
             assert len(csd_) > 0, "No weights found to load, try manual mapping of source state_dict to target model"
         except AssertionError as e:
+            print(e)
             # Map YOLO state_dict to MultiTaskModel state_dict
             csd_ = self.map_yolo_to_multitask(csd, self.state_dict(), verbose)
 

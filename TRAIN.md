@@ -18,5 +18,5 @@
 3. To train the model for multi-task detection and super-resolution, run the following command:
 
     ```bash
-    yolo detsr train data=weaponsensev2.yaml model=yolov8s.yaml pretrained=yolov8s.pt epochs=300 imgsz=640 batch=8 optimizer=SGD project=runs/DELETE/yolo8s/ name=YOLOSRCross
+    yolo detsr train data=multi-mothsynth-weaponsensev2.yaml model=yolo-detsrv8s.yaml pretrained=yolov8s.pt epochs=300 imgsz=640 batch=16 optimizer=SGD project=runs/yolo8s/ name=YOLOSRCross
     ```
